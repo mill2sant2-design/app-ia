@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Entornos virtuales
+.env
+.venv
+env/
+venv/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# YOLO / Ultralytics
+runs/
+*.pt.bak
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
