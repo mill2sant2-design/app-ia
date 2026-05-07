@@ -1,8 +1,9 @@
 import streamlit as st
 import numpy as np
+import cv2
 from ultralytics import YOLO
-from PIL import Image, ImageEnhance
-import easyocr
+from PIL import Image
+import pytesseract
 import io
 
 st.set_page_config(
@@ -42,12 +43,7 @@ st.markdown("""
 def load_model():
     return YOLO("models/best.pt")
 
-@st.cache_resource
-def load_ocr():
-    return easyocr.Reader(['en'], gpu=False)
-
 model = load_model()
-reader = load_ocr()
 
 LETRA_A_NUMERO = {"O":"0","I":"1","G":"6","B":"8","S":"5","Z":"2"}
 NUMERO_A_LETRA = {"0":"O","1":"I","6":"G","8":"B","5":"S","2":"Z"}
@@ -63,40 +59,51 @@ def corregir_placa(texto):
             resultado.append(LETRA_A_NUMERO.get(c, c))
     return "".join(resultado)
 
+def preprocesar_cv2(img_bgr):
+    # Recortar solo zona del número (55% superior)
+    h, w = img_bgr.shape[:2]
+    img_bgr = img_bgr[:int(h * 0.58), :]
+
+    # Escalar 4x
+    img_bgr = cv2.resize(img_bgr, (w * 4, int(h * 0.58) * 4), interpolation=cv2.INTER_CUBIC)
+
+    # Gris
+    gris = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+
+    # CLAHE para mejorar contraste local
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+    gris = clahe.apply(gris)
+
+    # Threshold de Otsu
+    _, thresh = cv2.threshold(gris, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+    # Eliminar ruido
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+    thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
+
+    return thresh
+
 def leer_placa(imagen_pil):
-    w, h = imagen_pil.size
+    # PIL → BGR para OpenCV
+    img_np = np.array(imagen_pil)
+    img_bgr = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
 
-    # Probar con dos alturas de recorte y quedarse con el mejor resultado
-    mejores = []
-    for pct in [0.55, 0.62, 0.70]:
-        zona = imagen_pil.crop((0, 0, w, int(h * pct)))
-        # Mejorar contraste antes del OCR
-        zona = ImageEnhance.Contrast(zona).enhance(1.8)
-        img_np = np.array(zona)
-        try:
-            resultados = reader.readtext(
-                img_np,
-                allowlist="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
-                detail=1,
-                paragraph=False,
-                text_threshold=0.5,
-                low_text=0.3,
-                contrast_ths=0.1,
-                adjust_contrast=0.5
-            )
-            if resultados:
-                resultados.sort(key=lambda x: x[0][0][0])
-                texto = "".join(r[1] for r in resultados)
-                texto = "".join(c for c in texto if c.isalnum()).upper()
-                mejores.append(texto)
-        except:
-            continue
+    resultados = []
+    for intentar_invertir in [False, True]:
+        procesada = preprocesar_cv2(img_bgr)
+        if intentar_invertir:
+            procesada = cv2.bitwise_not(procesada)
 
-    if not mejores:
+        config = "--psm 8 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+        raw = pytesseract.image_to_string(procesada, config=config).strip()
+        texto = "".join(c for c in raw if c.isalnum()).upper()
+        if texto:
+            resultados.append(texto)
+
+    if not resultados:
         return ""
 
-    # Elegir el candidato más cercano a 6 chars
-    mejor = min(mejores, key=lambda x: abs(len(x) - 6))
+    mejor = min(resultados, key=lambda x: abs(len(x) - 6))
     if len(mejor) > 6:
         mejor = mejor[:6]
     if len(mejor) == 6:
@@ -122,10 +129,11 @@ uploaded_file = st.file_uploader("📁 Selecciona una imagen", type=["jpg", "jpe
 if uploaded_file is not None:
     pil_image = Image.open(uploaded_file).convert("RGB")
     image_np = np.array(pil_image)
-    w, h = pil_image.size
+    img_bgr = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
+    h, w = img_bgr.shape[:2]
 
     with st.spinner("🔍 Analizando imagen..."):
-        results = model.predict(image_np, conf=conf_threshold, iou=iou_threshold, verbose=False)
+        results = model.predict(img_bgr, conf=conf_threshold, iou=iou_threshold, verbose=False)
 
     boxes = results[0].boxes
     num_detections = len(boxes) if boxes is not None else 0
@@ -160,13 +168,15 @@ if uploaded_file is not None:
                 x1, y1, x2, y2 = map(int, box.xyxy[0])
                 x1, y1 = max(0, x1), max(0, y1)
                 x2, y2 = min(w, x2), min(h, y2)
-                cropped_pil = pil_image.crop((x1, y1, x2, y2))
+
+                recorte_bgr = img_bgr[y1:y2, x1:x2]
+                recorte_pil = Image.fromarray(cv2.cvtColor(recorte_bgr, cv2.COLOR_BGR2RGB))
                 conf_val = float(box.conf[0])
 
-                st.image(cropped_pil, use_container_width=True, caption=f"Placa {i+1} — Confianza: {conf_val:.1%}")
+                st.image(recorte_pil, use_container_width=True, caption=f"Placa {i+1} — Confianza: {conf_val:.1%}")
 
                 with st.spinner("📖 Leyendo texto..."):
-                    texto = leer_placa(cropped_pil)
+                    texto = leer_placa(recorte_pil)
 
                 if texto:
                     display = f"{texto[:3]}-{texto[3:]}" if len(texto) == 6 else texto
@@ -175,7 +185,7 @@ if uploaded_file is not None:
                     st.info("No se pudo leer el texto.")
 
                 buf_crop = io.BytesIO()
-                cropped_pil.save(buf_crop, format="PNG")
+                recorte_pil.save(buf_crop, format="PNG")
                 st.download_button(f"⬇️ Descargar placa {i+1}", buf_crop.getvalue(), f"placa_{i+1}.png", "image/png", key=f"dl_{i}")
         else:
             st.warning("⚠️ No se detectaron placas. Prueba bajando el umbral de confianza.")
@@ -183,4 +193,4 @@ else:
     st.markdown('<div style="text-align:center;padding:60px 20px;color:#aaa;"><div style="font-size:4rem;">📷</div><p>Sube una imagen para comenzar</p></div>', unsafe_allow_html=True)
 
 st.divider()
-st.markdown("<p style='text-align:center;color:#aaa;font-size:0.85rem;'>Talento Tech 2026 · Bootcamp IA Innovadora · Detección de Placas con YOLOv8 + EasyOCR</p>", unsafe_allow_html=True)
+st.markdown("<p style='text-align:center;color:#aaa;font-size:0.85rem;'>Talento Tech 2026 · Bootcamp IA Innovadora · Detección de Placas con YOLOv8 + OpenCV + Tesseract</p>", unsafe_allow_html=True)
