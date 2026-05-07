@@ -44,42 +44,56 @@ def load_model():
 
 model = load_model()
 
-# Corrección de caracteres según posición (formato colombiano AAA-000)
 LETRA_A_NUMERO = {"O": "0", "I": "1", "G": "6", "B": "8", "S": "5", "Z": "2"}
 NUMERO_A_LETRA = {"0": "O", "1": "I", "6": "G", "8": "B", "5": "S", "2": "Z"}
 
 def corregir_placa(texto):
-    """Corrige errores OCR usando formato colombiano: 3 letras + 3 números."""
     texto = "".join(c for c in texto if c.isalnum()).upper()
     if len(texto) != 6:
-        return texto  # No aplica corrección si no tiene 6 chars
+        return texto
     resultado = []
     for i, c in enumerate(texto):
-        if i < 3:  # Debe ser letra
+        if i < 3:
             resultado.append(NUMERO_A_LETRA.get(c, c))
-        else:       # Debe ser número
+        else:
             resultado.append(LETRA_A_NUMERO.get(c, c))
     return "".join(resultado)
 
 def preprocesar(imagen_pil):
-    """Preprocesa la imagen para mejorar el OCR."""
-    # Escalar 4x
     w, h = imagen_pil.size
     imagen_pil = imagen_pil.resize((w * 4, h * 4), Image.LANCZOS)
-    # Convertir a gris
     gris = imagen_pil.convert("L")
-    # Aumentar contraste
     gris = ImageEnhance.Contrast(gris).enhance(2.5)
-    # Aumentar nitidez
     gris = gris.filter(ImageFilter.SHARPEN)
     return gris
 
 def leer_placa(imagen_pil):
     img = preprocesar(imagen_pil)
-    config = "--psm 8 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-    texto = pytesseract.image_to_string(img, config=config).strip()
-    texto = "".join(c for c in texto if c.isalnum()).upper()
-    return corregir_placa(texto)
+
+    configs = [
+        "--psm 8 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+        "--psm 7 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+        "--psm 6 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+        "--psm 13 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+    ]
+
+    candidatos = []
+    for cfg in configs:
+        try:
+            raw = pytesseract.image_to_string(img, config=cfg).strip()
+            limpio = "".join(c for c in raw if c.isalnum()).upper()
+            if limpio:
+                candidatos.append(limpio)
+        except:
+            continue
+
+    mejor = min(candidatos, key=lambda x: abs(len(x) - 6), default="")
+
+    if len(mejor) == 6:
+        return corregir_placa(mejor)
+    if len(mejor) > 6:
+        return corregir_placa(mejor[:6])
+    return mejor
 
 with st.sidebar:
     st.image("https://img.icons8.com/fluency/96/car.png", width=80)
@@ -143,21 +157,15 @@ if uploaded_file is not None:
 
                 st.image(cropped_pil, use_container_width=True, caption=f"Placa {i+1} — Confianza: {conf_val:.1%}")
 
-                with st.spinner(f"📖 Leyendo texto..."):
+                with st.spinner("📖 Leyendo texto..."):
                     texto = leer_placa(cropped_pil)
 
                 if texto:
-                    st.markdown(f'<div class="plate-text">🔤 {texto[:3]}-{texto[3:]}</div>', unsafe_allow_html=True)
+                    display = f"{texto[:3]}-{texto[3:]}" if len(texto) == 6 else texto
+                    st.markdown(f'<div class="plate-text">🔤 {display}</div>', unsafe_allow_html=True)
                 else:
                     st.info("No se pudo leer el texto.")
 
                 buf_crop = io.BytesIO()
                 cropped_pil.save(buf_crop, format="PNG")
-                st.download_button(f"⬇️ Descargar placa {i+1}", buf_crop.getvalue(), f"placa_{i+1}.png", "image/png", key=f"dl_{i}")
-        else:
-            st.warning("⚠️ No se detectaron placas. Prueba bajando el umbral de confianza.")
-else:
-    st.markdown('<div style="text-align:center;padding:60px 20px;color:#aaa;"><div style="font-size:4rem;">📷</div><p>Sube una imagen para comenzar</p></div>', unsafe_allow_html=True)
-
-st.divider()
-st.markdown("<p style='text-align:center;color:#aaa;font-size:0.85rem;'>Talento Tech 2026 · Bootcamp IA Innovadora · Detección de Placas con YOLOv8 + OCR</p>", unsafe_allow_html=True)
+                st.download_button(f"⬇️ Descargar placa {i+1}",
