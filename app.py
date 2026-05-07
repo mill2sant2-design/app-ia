@@ -1,8 +1,8 @@
 import streamlit as st
 import numpy as np
 from ultralytics import YOLO
-from PIL import Image, ImageEnhance, ImageFilter
-import pytesseract
+from PIL import Image
+import easyocr
 import io
 
 st.set_page_config(
@@ -42,13 +42,17 @@ st.markdown("""
 def load_model():
     return YOLO("models/best.pt")
 
-model = load_model()
+@st.cache_resource
+def load_ocr():
+    return easyocr.Reader(['en'], gpu=False)
 
-LETRA_A_NUMERO = {"O": "0", "I": "1", "G": "6", "B": "8", "S": "5", "Z": "2"}
-NUMERO_A_LETRA = {"0": "O", "1": "I", "6": "G", "8": "B", "5": "S", "2": "Z"}
+model = load_model()
+reader = load_ocr()
+
+LETRA_A_NUMERO = {"O":"0","I":"1","G":"6","B":"8","S":"5","Z":"2"}
+NUMERO_A_LETRA = {"0":"O","1":"I","6":"G","8":"B","5":"S","2":"Z"}
 
 def corregir_placa(texto):
-    texto = "".join(c for c in texto if c.isalnum()).upper()
     if len(texto) != 6:
         return texto
     resultado = []
@@ -59,41 +63,25 @@ def corregir_placa(texto):
             resultado.append(LETRA_A_NUMERO.get(c, c))
     return "".join(resultado)
 
-def preprocesar(imagen_pil):
-    w, h = imagen_pil.size
-    imagen_pil = imagen_pil.resize((w * 4, h * 4), Image.LANCZOS)
-    gris = imagen_pil.convert("L")
-    gris = ImageEnhance.Contrast(gris).enhance(2.5)
-    gris = gris.filter(ImageFilter.SHARPEN)
-    return gris
-
 def leer_placa(imagen_pil):
-    img = preprocesar(imagen_pil)
-
-    configs = [
-        "--psm 8 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
-        "--psm 7 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
-        "--psm 6 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
-        "--psm 13 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
-    ]
-
-    candidatos = []
-    for cfg in configs:
-        try:
-            raw = pytesseract.image_to_string(img, config=cfg).strip()
-            limpio = "".join(c for c in raw if c.isalnum()).upper()
-            if limpio:
-                candidatos.append(limpio)
-        except:
-            continue
-
-    mejor = min(candidatos, key=lambda x: abs(len(x) - 6), default="")
-
-    if len(mejor) == 6:
-        return corregir_placa(mejor)
-    if len(mejor) > 6:
-        return corregir_placa(mejor[:6])
-    return mejor
+    img_np = np.array(imagen_pil)
+    resultados = reader.readtext(
+        img_np,
+        allowlist="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+        detail=1
+    )
+    if not resultados:
+        return ""
+    # Ordenar por confianza y unir texto
+    resultados.sort(key=lambda x: x[2], reverse=True)
+    texto = "".join(r[1] for r in resultados)
+    texto = "".join(c for c in texto if c.isalnum()).upper()
+    # Ajustar a 6 caracteres
+    if len(texto) > 6:
+        texto = texto[:6]
+    if len(texto) == 6:
+        return corregir_placa(texto)
+    return texto
 
 with st.sidebar:
     st.image("https://img.icons8.com/fluency/96/car.png", width=80)
@@ -175,4 +163,4 @@ else:
     st.markdown('<div style="text-align:center;padding:60px 20px;color:#aaa;"><div style="font-size:4rem;">📷</div><p>Sube una imagen para comenzar</p></div>', unsafe_allow_html=True)
 
 st.divider()
-st.markdown("<p style='text-align:center;color:#aaa;font-size:0.85rem;'>Talento Tech 2026 · Bootcamp IA Innovadora · Detección de Placas con YOLOv8 + OCR</p>", unsafe_allow_html=True)
+st.markdown("<p style='text-align:center;color:#aaa;font-size:0.85rem;'>Talento Tech 2026 · Bootcamp IA Innovadora · Detección de Placas con YOLOv8 + EasyOCR</p>", unsafe_allow_html=True)
