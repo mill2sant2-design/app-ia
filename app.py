@@ -168,4 +168,11 @@ if uploaded_file is not None:
 
                 buf_crop = io.BytesIO()
                 cropped_pil.save(buf_crop, format="PNG")
-                st.download_button(f"⬇️ Descargar placa {i+1}",
+                st.download_button(f"⬇️ Descargar placa {i+1}", buf_crop.getvalue(), f"placa_{i+1}.png", "image/png", key=f"dl_{i}")
+        else:
+            st.warning("⚠️ No se detectaron placas. Prueba bajando el umbral de confianza.")
+else:
+    st.markdown('<div style="text-align:center;padding:60px 20px;color:#aaa;"><div style="font-size:4rem;">📷</div><p>Sube una imagen para comenzar</p></div>', unsafe_allow_html=True)
+
+st.divider()
+st.markdown("<p style='text-align:center;color:#aaa;font-size:0.85rem;'>Talento Tech 2026 · Bootcamp IA Innovadora · Detección de Placas con YOLOv8 + OCR</p>", unsafe_allow_html=True)
