@@ -1,7 +1,7 @@
 import streamlit as st
 import numpy as np
 from ultralytics import YOLO
-from PIL import Image
+from PIL import Image, ImageEnhance, ImageFilter
 import pytesseract
 import io
 
@@ -44,19 +44,42 @@ def load_model():
 
 model = load_model()
 
-def leer_placa(imagen_pil):
-    """Aplica preprocesamiento y OCR a un recorte de placa."""
-    # Escalar para mejor OCR
-    w, h = imagen_pil.size
-    imagen_pil = imagen_pil.resize((w * 3, h * 3), Image.LANCZOS)
-    # Escala de grises
-    gris = imagen_pil.convert("L")
-    # OCR con configuración para placas
-    config = "--psm 8 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-    texto = pytesseract.image_to_string(gris, config=config).strip()
-    # Limpiar resultado
+# Corrección de caracteres según posición (formato colombiano AAA-000)
+LETRA_A_NUMERO = {"O": "0", "I": "1", "G": "6", "B": "8", "S": "5", "Z": "2"}
+NUMERO_A_LETRA = {"0": "O", "1": "I", "6": "G", "8": "B", "5": "S", "2": "Z"}
+
+def corregir_placa(texto):
+    """Corrige errores OCR usando formato colombiano: 3 letras + 3 números."""
     texto = "".join(c for c in texto if c.isalnum()).upper()
-    return texto
+    if len(texto) != 6:
+        return texto  # No aplica corrección si no tiene 6 chars
+    resultado = []
+    for i, c in enumerate(texto):
+        if i < 3:  # Debe ser letra
+            resultado.append(NUMERO_A_LETRA.get(c, c))
+        else:       # Debe ser número
+            resultado.append(LETRA_A_NUMERO.get(c, c))
+    return "".join(resultado)
+
+def preprocesar(imagen_pil):
+    """Preprocesa la imagen para mejorar el OCR."""
+    # Escalar 4x
+    w, h = imagen_pil.size
+    imagen_pil = imagen_pil.resize((w * 4, h * 4), Image.LANCZOS)
+    # Convertir a gris
+    gris = imagen_pil.convert("L")
+    # Aumentar contraste
+    gris = ImageEnhance.Contrast(gris).enhance(2.5)
+    # Aumentar nitidez
+    gris = gris.filter(ImageFilter.SHARPEN)
+    return gris
+
+def leer_placa(imagen_pil):
+    img = preprocesar(imagen_pil)
+    config = "--psm 8 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+    texto = pytesseract.image_to_string(img, config=config).strip()
+    texto = "".join(c for c in texto if c.isalnum()).upper()
+    return corregir_placa(texto)
 
 with st.sidebar:
     st.image("https://img.icons8.com/fluency/96/car.png", width=80)
@@ -120,14 +143,13 @@ if uploaded_file is not None:
 
                 st.image(cropped_pil, use_container_width=True, caption=f"Placa {i+1} — Confianza: {conf_val:.1%}")
 
-                # OCR
-                with st.spinner(f"📖 Leyendo texto de placa {i+1}..."):
+                with st.spinner(f"📖 Leyendo texto..."):
                     texto = leer_placa(cropped_pil)
 
                 if texto:
-                    st.markdown(f'<div class="plate-text">🔤 {texto}</div>', unsafe_allow_html=True)
+                    st.markdown(f'<div class="plate-text">🔤 {texto[:3]}-{texto[3:]}</div>', unsafe_allow_html=True)
                 else:
-                    st.info("No se pudo leer el texto de la placa.")
+                    st.info("No se pudo leer el texto.")
 
                 buf_crop = io.BytesIO()
                 cropped_pil.save(buf_crop, format="PNG")
