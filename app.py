@@ -64,20 +64,22 @@ def corregir_placa(texto):
     return "".join(resultado)
 
 def leer_placa(imagen_pil):
-    # Recortar solo la mitad superior (número, no municipio)
     w, h = imagen_pil.size
-    zona_numero = imagen_pil.crop((0, 0, w, int(h * 0.65)))
+    zona_numero = imagen_pil.crop((0, 0, w, int(h * 0.70)))
 
     img_np = np.array(zona_numero)
     resultados = reader.readtext(
         img_np,
         allowlist="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
         detail=1,
-        paragraph=False
+        paragraph=False,
+        text_threshold=0.5,
+        low_text=0.3,
+        contrast_ths=0.1,
+        adjust_contrast=0.5
     )
     if not resultados:
         return ""
-    # Ordenar de izquierda a derecha
     resultados.sort(key=lambda x: x[0][0][0])
     texto = "".join(r[1] for r in resultados)
     texto = "".join(c for c in texto if c.isalnum()).upper()
