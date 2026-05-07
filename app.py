@@ -1,7 +1,7 @@
 import streamlit as st
 import numpy as np
 from ultralytics import YOLO
-from PIL import Image
+from PIL import Image, ImageEnhance
 import easyocr
 import io
 
@@ -65,29 +65,43 @@ def corregir_placa(texto):
 
 def leer_placa(imagen_pil):
     w, h = imagen_pil.size
-    zona_numero = imagen_pil.crop((0, 0, w, int(h * 0.70)))
 
-    img_np = np.array(zona_numero)
-    resultados = reader.readtext(
-        img_np,
-        allowlist="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
-        detail=1,
-        paragraph=False,
-        text_threshold=0.5,
-        low_text=0.3,
-        contrast_ths=0.1,
-        adjust_contrast=0.5
-    )
-    if not resultados:
+    # Probar con dos alturas de recorte y quedarse con el mejor resultado
+    mejores = []
+    for pct in [0.55, 0.62, 0.70]:
+        zona = imagen_pil.crop((0, 0, w, int(h * pct)))
+        # Mejorar contraste antes del OCR
+        zona = ImageEnhance.Contrast(zona).enhance(1.8)
+        img_np = np.array(zona)
+        try:
+            resultados = reader.readtext(
+                img_np,
+                allowlist="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+                detail=1,
+                paragraph=False,
+                text_threshold=0.5,
+                low_text=0.3,
+                contrast_ths=0.1,
+                adjust_contrast=0.5
+            )
+            if resultados:
+                resultados.sort(key=lambda x: x[0][0][0])
+                texto = "".join(r[1] for r in resultados)
+                texto = "".join(c for c in texto if c.isalnum()).upper()
+                mejores.append(texto)
+        except:
+            continue
+
+    if not mejores:
         return ""
-    resultados.sort(key=lambda x: x[0][0][0])
-    texto = "".join(r[1] for r in resultados)
-    texto = "".join(c for c in texto if c.isalnum()).upper()
-    if len(texto) > 6:
-        texto = texto[:6]
-    if len(texto) == 6:
-        return corregir_placa(texto)
-    return texto
+
+    # Elegir el candidato más cercano a 6 chars
+    mejor = min(mejores, key=lambda x: abs(len(x) - 6))
+    if len(mejor) > 6:
+        mejor = mejor[:6]
+    if len(mejor) == 6:
+        return corregir_placa(mejor)
+    return mejor
 
 with st.sidebar:
     st.image("https://img.icons8.com/fluency/96/car.png", width=80)
